@@ -122,8 +122,8 @@ jobs:
           curl https://tunnel.pyjam.as/8080 > /tmp/8080.conf
           wg-quick up /tmp/8080.conf
 
-
-      - name: Start OFRAK...
+      - name: Display connection information
+        shell: bash
         run: |
           URL="$(
             grep https /tmp/8080.conf \
@@ -141,6 +141,8 @@ jobs:
               "${URL}shell/" ""
           fi
 
+      - name: Start OFRAK...
+        run: |
           ofrak gui \
               --hostname 0.0.0.0 \
               --port 6969 \
