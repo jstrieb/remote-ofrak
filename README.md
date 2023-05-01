@@ -17,6 +17,9 @@ your browser, without installing anything. This is great for:
   software, such as at school or the library
 - Using OFRAK on a mobile device like an iPad or VR headset
 
+<div align="center">
+<img src="doc/screenshot_0.png" width="90%" align="center" />
+</div>
 
 
 # Quick Start
