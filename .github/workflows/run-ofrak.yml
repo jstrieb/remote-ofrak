@@ -143,6 +143,8 @@ jobs:
 
       - name: Start OFRAK...
         run: |
+          # Kill OFRAK automatically after 6 hours
+          sleep 6h && sudo pkill ofrak &
           ofrak gui \
               --hostname 0.0.0.0 \
               --port 6969 \
