@@ -1,0 +1,152 @@
+name: Run OFRAK
+
+on:
+  workflow_dispatch:
+    inputs:
+      optional_dependencies:
+        description: Install optional OFRAK dependencies
+        required: true
+        type: boolean
+        default: false
+      run_shell:
+        description: Create a background shell
+        required: true
+        type: boolean
+        default: false
+
+defaults:
+  run:
+    shell: bash -eux {0}
+
+jobs:
+  start_server:
+    name: Run OFRAK
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Install packages
+        run: |
+          python3 -m pip install --upgrade pip setuptools wheel pyopenssl
+          python3 -m pip install ofrak ofrak_angr ofrak_capstone
+          python3 -m pip install --upgrade "importlib-metadata>=1.4"
+
+
+      - name: Install dependencies
+        if: ${{ inputs.optional_dependencies }}
+        run: |
+          sudo apt-get update
+          ofrak deps --packages-for apt --missing-only | xargs sudo apt-get install --yes
+
+          pushd /tmp
+          git clone https://github.com/ReFirmLabs/binwalk.git
+          cd binwalk
+          sudo ./deps.sh --yes
+          python3 -m pip install .
+          popd
+
+      - name: Run ttyd
+        if: ${{ inputs.run_shell }}
+        run: |
+          # xterm is required for tmux/ttyd
+          sudo apt-get --yes install xterm
+
+          sudo wget \
+            --quiet \
+            --output-document /usr/local/bin/ttyd \
+            "https://github.com/tsl0922/ttyd/releases/download/1.6.1/ttyd_linux.x86_64"
+          sudo chmod +x /usr/local/bin/ttyd
+
+          # Run ttyd in the background as a daemon
+          tmux new-session -d -c "$(pwd)" -s ofrak
+          start-stop-daemon \
+            --start \
+            --background \
+            --chdir "$(pwd)" \
+            --exec /usr/local/bin/ttyd \
+            -- \
+              --port 7681 \
+              /bin/bash -c "cd '$(pwd)' && tmux new-session -c '$(pwd)' -s "'"ofrak""$((RANDOM))"'" -t ofrak"
+
+
+      - name: Run reverse proxy and CGI scripts
+        run: |
+          # Install, configure, and run Caddy
+          wget \
+            --quiet \
+            --output-document /tmp/caddy.deb \
+            "https://github.com/caddyserver/caddy/releases/download/v2.6.4/caddy_2.6.4_linux_amd64.deb"
+          sudo dpkg -i /tmp/caddy.deb
+
+          cat <<"EOF" > Caddyfile
+          {
+                  admin off
+          }
+
+          :8080 {
+                  handle_path /scripts/* {
+                          reverse_proxy localhost:42069
+                  }
+                  handle_path /shell/* {
+                          reverse_proxy localhost:7681
+                  }
+                  reverse_proxy localhost:6969
+          }
+          EOF
+          caddy start --config Caddyfile
+
+          # Install, configure, and run QuickServ
+          mkdir -p scripts
+          touch scripts/kill
+          chmod +x scripts/kill
+          cat <<"EOF" > scripts/kill
+          #!/bin/sh
+          echo "Killing 'ofrak'..."
+          sudo pkill ofrak || true
+          echo "Done!"
+          EOF
+
+          sudo wget \
+            --quiet \
+            --output-document /usr/local/bin/quickserv \
+            "https://github.com/jstrieb/quickserv/releases/latest/download/quickserv_linux_x64"
+          sudo chmod +x /usr/local/bin/quickserv
+          start-stop-daemon \
+            --start \
+            --background \
+            --chdir "$(pwd)/scripts" \
+            --exec /usr/local/bin/quickserv
+
+
+      - name: Run PyJam tunnel
+        run: |
+          sudo apt-get install -y wireguard
+          curl https://tunnel.pyjam.as/8080 > /tmp/8080.conf
+          wg-quick up /tmp/8080.conf
+
+
+      - name: Start OFRAK...
+        run: |
+          URL="$(
+            grep https /tmp/8080.conf \
+              | sed 's/.*\(https:\/\/[^ ]*\).*/\1/g'
+          )"
+          printf "\033[1m\033[32m%s\033[m\n" \
+            "To connect to OFRAK:" \
+            "${URL}" "" \
+            "To kill the server:" \
+            "${URL}scripts/kill" ""
+
+          if [ ${{ inputs.run_shell }} = "true" ]; then
+            printf "\033[1m\033[32m%s\033[m\n" \
+              "To connect to the shell:" \
+              "${URL}shell/" ""
+          fi
+
+          ofrak gui \
+              --hostname 0.0.0.0 \
+              --port 6969 \
+              --no-browser \
+              --enable-cors \
+              --logging-level INFO \
+              --backend angr \
+            || true
+
